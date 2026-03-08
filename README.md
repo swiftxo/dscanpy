@@ -78,7 +78,7 @@ At 5ms latency per directory, a tree with 10,000 directories takes ~50s serially
 ## Installation
 
 ```bash
-pip install dscan
+pip install dscanpy
 ```
 
 Requires Python 3.12+. No other dependencies.
