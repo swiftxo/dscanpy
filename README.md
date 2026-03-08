@@ -19,6 +19,29 @@ On SMB shares, NFS mounts, or any high-latency filesystem, each `scandir` call b
 
 ---
 
+## Windows + SMB: the strongest use case
+
+On Windows, the underlying `FindNextFile` API returns full file metadata — including size and timestamps — in the same call as the directory listing. This means `DirEntry.stat()` is effectively free; no additional syscalls are needed to populate a `FileEntry` model.
+
+This makes `scan()` model mode on Windows significantly more efficient than on Linux or macOS, where `stat` requires a separate syscall per entry. The structured output you get from `scan()` comes at almost no extra cost over `scan_entries`.
+
+Combined with the concurrency win on high-latency mounts, **Windows users scanning SMB network shares or mapped corporate drives get the best of both worlds**: concurrent traversal and rich metadata at near-zero overhead. This is the scenario where dscan provides the clearest, most measurable improvement over `os.walk`.
+
+Recommended for:
+- Corporate environments with large SMB file servers
+- NAS devices accessed over Windows network shares
+- Any mapped drive with deep directory trees
+
+Tuning for high-latency mounts:
+
+```python
+# Increase workers to match network latency
+for entry in scan("//fileserver/share", max_workers=32):
+    print(entry.path)
+```
+
+---
+
 ## Benchmarks
 
 ### Local SSD (~4M entries, MacBook)
@@ -31,6 +54,8 @@ On SMB shares, NFS mounts, or any high-latency filesystem, each `scandir` call b
 | `dscan.scan` (models) | 4,014,758 | 140.15s |
 
 `scan_entries` is on par with bare `os.walk`. `scan` is slower because stat calls happen on the main thread serially — the workers parallelise `scandir`, not `stat`. Use `scan` when you want the structured output; use `scan_entries` when throughput matters.
+
+> **Note:** This benchmark was run on macOS where `stat` requires a separate syscall per entry. On Windows, `scan()` performance is substantially better due to `FindNextFile` bundling metadata. See the Windows + SMB section above.
 
 ### Simulated network latency (5ms per directory)
 
@@ -187,6 +212,13 @@ for entry in scan_entries("/mnt/nas", max_workers=32):
 | Built-in models | No | No | Yes |
 | Depth limit | Manual | No | Yes |
 | Directory exclusions | Manual | No | Yes |
+
+---
+
+## Roadmap
+
+- **Move stat into workers** — on Linux/macOS over NFS or high-latency mounts, `stat` is a separate network round-trip per entry, just like `scandir`. Running stat inside the worker threads would let latency overlap across concurrent workers, significantly improving `scan()` model performance on those platforms.
+- **`getattrlistbulk` support (macOS)** — macOS exposes a syscall that returns full file attributes (including size and timestamps) for all entries in a single directory call, equivalent to what Windows gets from `FindNextFile`. Implementing this would bring `scan()` performance on local macOS disk in line with Windows, and close the current gap between `scan()` and `scan_entries()` shown in the benchmarks above.
 
 ---
 
