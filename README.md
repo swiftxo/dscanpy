@@ -1,5 +1,10 @@
 # dscan
 
+[![PyPI](https://img.shields.io/pypi/v/dscanpy)](https://pypi.org/project/dscanpy/)
+[![Python](https://img.shields.io/pypi/pyversions/dscanpy)](https://pypi.org/project/dscanpy/)
+[![License](https://img.shields.io/pypi/l/dscanpy)](LICENSE)
+
+
 `dscan` is a concurrent directory scanner for Python 3.12+. It wraps `os.scandir` in a thread pool with a work-stealing queue, exposing a filtering API that covers most of what you'd otherwise implement by hand on top of `os.walk`.
 
 Two modes: `scan_entries` yields raw `os.DirEntry` objects with minimal overhead; `scan` yields dataclass models with pre-computed metadata.
