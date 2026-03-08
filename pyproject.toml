@@ -1,6 +1,6 @@
 [project]
 name = "dscanpy"
-version = "0.1.1"
+version = "0.1.2"
 description = "Concurrent directory tree scanner for Python 3.12+"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/yourusername/dscanpy"
+Repository = "https://github.com/swiftxo/dscanpy"
 
 [tool.poetry]
 packages = [{include = "dscan", from = "src"}]
