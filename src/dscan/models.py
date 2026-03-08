@@ -1,9 +1,12 @@
-from pydantic import BaseModel
 from datetime import datetime
 import os
 
+from dataclasses import dataclass
+from datetime import datetime
 
-class FileEntry(BaseModel):
+
+@dataclass(slots=True, frozen=True)
+class FileEntry:
     name: str
     extension: str | None
     path: str
@@ -27,7 +30,8 @@ class FileEntry(BaseModel):
         )
 
 
-class DirectoryEntry(BaseModel):
+@dataclass(slots=True, frozen=True)
+class DirectoryEntry:
     name: str
     path: str
     parent_path: str

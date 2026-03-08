@@ -1,14 +1,47 @@
 # dscan
 
-`dscan` is a fast, concurrent directory tree scanner for Python 3.12+. It provides a high-level API for traversing large file systems with advanced filtering capabilities, yielding either raw `os.DirEntry` objects or rich Pydantic-based metadata models.
+`dscan` is a concurrent directory scanner for Python 3.12+. It wraps `os.scandir` in a thread pool with a work-stealing queue, exposing a filtering API that covers most of what you'd otherwise implement by hand on top of `os.walk`.
 
-## Key Features
+Two modes: `scan_entries` yields raw `os.DirEntry` objects with minimal overhead; `scan` yields dataclass models with pre-computed metadata.
 
-- **🚀 Concurrent Scanning:** Uses a thread pool and a work-stealing queue for efficient traversal, especially on high-latency file systems.
-- **✨ Rich Metadata Models:** Optionally yields `FileEntry` and `DirectoryEntry` objects with pre-calculated sizes, extensions, and timestamps.
-- **🛡️ Flexible Filtering:** Built-in support for extension allowlists/denylists, glob pattern matching, and custom filter callables.
-- **📐 Traversal Control:** Limit scan depth, ignore specific directories (with sensible defaults like `.git` and `.venv`), or only descend into specific subtrees.
-- **🧵 Thread-Safe:** Designed for concurrent execution with a managed internal state.
+---
+
+## Why concurrent scanning?
+
+On a local SSD, directory traversal is fast enough that threading adds more overhead than it saves. `scan_entries` still matches or edges out `os.walk`, but the real case for concurrency is **network-attached storage**.
+
+On SMB shares, NFS mounts, or any high-latency filesystem, each `scandir` call blocks waiting for a server response. `os.walk` does this serially — one directory at a time. dscan keeps multiple directories in-flight simultaneously, so workers aren't sitting idle while the network responds. On deep trees with many subdirectories, this compounds significantly.
+
+---
+
+## Benchmarks
+
+### Local SSD (~4M entries, MacBook)
+
+| | entries | time |
+|---|---|---|
+| `os.walk` (no stat) | 4,046,505 | 33.30s |
+| `os.walk` (+ stat) | 4,039,313 | 85.24s |
+| `dscan.scan_entries` | 4,046,502 | **31.90s** |
+| `dscan.scan` (models) | 4,014,758 | 140.15s |
+
+`scan_entries` is on par with bare `os.walk`. `scan` is slower because stat calls happen on the main thread serially — the workers parallelise `scandir`, not `stat`. Use `scan` when you want the structured output; use `scan_entries` when throughput matters.
+
+### Simulated network latency (5ms per directory)
+
+```python
+# rough simulation
+import time, os
+_real = os.scandir
+os.scandir = lambda p: (time.sleep(0.005), _real(p))[1]
+```
+
+| | time |
+|---|---|
+| `os.walk` | ~linear with directory count |
+| `dscan.scan_entries` | scales with `max_workers` |
+
+At 5ms latency per directory, a tree with 10,000 directories takes ~50s serially. With 16 workers dscan brings that to ~4s. The deeper and wider the tree, the bigger the difference.
 
 ---
 
@@ -18,127 +51,137 @@
 pip install dscan
 ```
 
-*(Note: Requires Python 3.12+ and `pydantic`)*
+Requires Python 3.12+. No other dependencies.
 
 ---
 
-## Quick Start
+## Usage
 
-### Basic Scanning
-The `scan` function is the primary entry point, yielding rich metadata models.
+### Basic scan
 
 ```python
 from dscan import scan
 
-# Yield every file and directory under the current path
 for entry in scan("."):
     print(f"{entry.name} - {entry.path}")
 ```
 
-### High-Performance Raw Scanning
-If you only need raw `os.DirEntry` objects (for maximum performance or minimal overhead), use `scan_entries`.
+### Raw entries (lower overhead)
 
 ```python
 from dscan import scan_entries
 
 for entry in scan_entries("~/Documents", max_depth=2):
     if entry.is_file():
-        print(f"File: {entry.name}")
+        print(entry.name)
 ```
 
 ---
 
-## Powerful Filtering
+## Filtering
 
-`dscan` provides a comprehensive set of filters directly in the `scan` and `scan_entries` functions.
-
-### Extension Filtering
-Include or exclude specific file types.
+### Extensions
 
 ```python
 # Only Python and Markdown files
 for file in scan(".", extensions={".py", ".md"}):
     print(file.path)
 
-# Skip large binary files
+# Skip compiled files
 for file in scan(".", ignore_extensions={".bin", ".exe"}):
     print(file.path)
 ```
 
-### Pattern Matching
-Match or ignore files and directories using glob patterns.
+### Glob patterns
 
 ```python
-# Find all "test" related files
+# Only test files
 for entry in scan(".", match="test_*"):
     print(entry.name)
 
-# Ignore all hidden files/folders
+# Skip hidden files and directories
 for entry in scan(".", ignore_pattern=".*"):
     print(entry.name)
 ```
 
-### Traversal Limits
-Control how deep and where the scanner goes.
+### Directory traversal
 
 ```python
-# Scan only immediate children (depth 0)
+# Immediate children only
 for entry in scan(".", max_depth=0):
     print(entry.name)
 
-# Only descend into 'src' and 'lib' folders
+# Only descend into src/ and lib/
 for entry in scan(".", only_dirs=["src", "lib"]):
     print(entry.path)
 
-# Skip specific heavy directories
-for entry in scan(".", ignore_dirs=["node_modules", "target"]):
+# Skip specific directories
+# .git, .idea, .venv, __pycache__ are skipped by default
+for entry in scan(".", ignore_dirs=["node_modules", "dist"]):
+    print(entry.path)
+
+# Disable all default ignores
+for entry in scan(".", ignore_dirs=[]):
     print(entry.path)
 ```
 
-### Custom Filters
-Provide your own logic for ultimate control.
+### Custom filter
 
 ```python
 def is_large_file(entry):
     return entry.is_file() and entry.stat().st_size > 1_000_000
 
 for entry in scan(".", custom_filter=is_large_file):
-    print(f"Found large file: {entry.name}")
+    print(entry.name)
+```
+
+### Tuning workers
+
+```python
+# default is min(32, cpu_count * 2)
+# increase on high-latency mounts
+for entry in scan_entries("/mnt/nas", max_workers=32):
+    print(entry.path)
 ```
 
 ---
 
 ## Data Models
 
-When using `scan()`, you receive either a `FileEntry` or a `DirectoryEntry`.
+`scan()` returns `FileEntry` or `DirectoryEntry` dataclasses.
 
 ### `FileEntry`
-- `name`: Filename without extension.
-- `extension`: Lowercase extension without the dot (e.g., `py`).
-- `path`: Full path to the file.
-- `dir_path`: Path to the containing directory.
-- `size`: File size in bytes.
-- `created_at`: `datetime` object.
-- `modified_at`: `datetime` object.
+
+| field | description |
+|---|---|
+| `name` | filename without extension |
+| `extension` | lowercase extension, no leading dot |
+| `path` | full path |
+| `dir_path` | containing directory |
+| `size` | bytes |
+| `created_at` | `datetime` |
+| `modified_at` | `datetime` |
 
 ### `DirectoryEntry`
-- `name`: Directory name.
-- `path`: Full path to the directory.
-- `parent_path`: Path to the parent directory.
-- `created_at`: `datetime` object.
-- `modified_at`: `datetime` object.
+
+| field | description |
+|---|---|
+| `name` | directory name |
+| `path` | full path |
+| `parent_path` | parent directory |
+| `created_at` | `datetime` |
+| `modified_at` | `datetime` |
 
 ---
 
-## Comparison
+## vs the stdlib
 
-| Feature | `os.walk` | `pathlib.rglob` | `dscan` |
-| :--- | :---: | :---: | :---: |
-| **Concurrency** | ❌ | ❌ | ✅ |
-| **Built-in Models** | ❌ | ❌ | ✅ |
-| **Depth Control** | Manual | ❌ | ✅ |
-| **Exclusion Rules** | Manual | ❌ | ✅ |
-| **Performance** | Good | Moderate | **High** |
+| | `os.walk` | `pathlib.rglob` | `dscan` |
+|---|:---:|:---:|:---:|
+| Concurrent traversal | No | No | Yes |
+| Built-in models | No | No | Yes |
+| Depth limit | Manual | No | Yes |
+| Directory exclusions | Manual | No | Yes |
 
 ---
 

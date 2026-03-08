@@ -1,15 +1,19 @@
 [project]
-name = "dscan"
+name = "dscanpy"
 version = "0.1.0"
-description = ""
-authors = [
-    {name = "Sohan",email = "hoss1529@mylaurier.ca"}
-]
+description = "Concurrent directory tree scanner for Python 3.12+"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "pydantic (>=2.12.5,<3.0.0)"
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Filesystems",
 ]
+
+[project.urls]
+Repository = "https://github.com/yourusername/dscanpy"
 
 [tool.poetry]
 packages = [{include = "dscan", from = "src"}]
